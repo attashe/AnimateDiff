@@ -2,6 +2,7 @@ import argparse
 import datetime
 import inspect
 import os
+os.environ['TRANSFORMERS_CACHE'] = './cache'
 from omegaconf import OmegaConf
 
 import torch
@@ -45,8 +46,13 @@ def main(args):
             inference_config = OmegaConf.load(model_config.get("inference_config", args.inference_config))
 
             ### >>> create validation pipeline >>> ###
-            tokenizer    = CLIPTokenizer.from_pretrained(args.pretrained_model_path, subfolder="tokenizer")
-            text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_path, subfolder="text_encoder")
+            print("Load pretrained tokenizer")
+            tokenizer    = CLIPTokenizer.from_pretrained(args.pretrained_model_path, subfolder="tokenizer",
+                                                         cache_dir=os.path.join(args.pretrained_model_path, "tokenizer"), local_files_only=True)
+            print('Load pretrained encoder')
+            text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_path, subfolder="text_encoder",
+                                                         cache_dir=os.path.join(args.pretrained_model_path, "text_encoder"), local_files_only=True)
+
             vae          = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae")            
             unet         = UNet3DConditionModel.from_pretrained_2d(args.pretrained_model_path, subfolder="unet", unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
 
@@ -111,7 +117,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pretrained_model_path", type=str, default="models/StableDiffusion/stable-diffusion-v1-5",)
+    parser.add_argument("--pretrained_model_path", type=str, default="./models/StableDiffusion/stable-diffusion-v1-5",)
     parser.add_argument("--inference_config",      type=str, default="configs/inference/inference-v1.yaml")    
     parser.add_argument("--config",                type=str, required=True)
     
