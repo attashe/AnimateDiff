@@ -2,12 +2,13 @@ import argparse
 import datetime
 import inspect
 import os
+os.environ['TRANSFORMERS_CACHE'] = './cache'
 from omegaconf import OmegaConf
 
 import torch
 
 import diffusers
-from diffusers import AutoencoderKL, EulerDiscreteScheduler
+from diffusers import AutoencoderKL, EulerDiscreteScheduler, StableDiffusionXLPipeline
 
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPTextModelWithProjection
@@ -46,8 +47,8 @@ def main(args):
 	config = OmegaConf.load(args.base_config)
 	config = OmegaConf.merge(config, exp_config)
 
-	if config.get('base_model_path', '') != '':
-		args.pretrained_model_path = config.base_model_path
+	# if config.get('base_model_path', '') != '':
+	# 	args.pretrained_model_path = config.base_model_path
 	
 	# Load Component
 	tokenizer	 = CLIPTokenizer.from_pretrained(args.pretrained_model_path, subfolder="tokenizer")
@@ -58,6 +59,21 @@ def main(args):
 
 	# init unet model
 	unet = UNet3DConditionModel.from_pretrained_2d(args.pretrained_model_path, subfolder="unet", unet_additional_kwargs=OmegaConf.to_container(config.unet_additional_kwargs))
+
+	# pipe = StableDiffusionXLPipeline.from_single_file(
+	# 	args.pretrained_model_path,
+	# 	torch_dtype=torch.float16,
+	# 	use_safety_checker=False
+	# )
+ 
+	# tokenizer = pipe.tokenizer
+	# text_encoder = pipe.text_encoder
+	# vae = pipe.vae
+	# tokenizer_two = pipe.tokenizer_2
+	# text_encoder_two = pipe.text_encoder_2
+ 
+	# unet = UNet3DConditionModel.from_single_file(pipe, args.pretrained_model_path, unet_additional_kwargs=OmegaConf.to_container(config.unet_additional_kwargs))
+
 
 	# Enable memory efficient attention
 	if is_xformers_available() and args.xformers:

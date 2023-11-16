@@ -22,6 +22,7 @@ import torch.nn as nn
 import torch.utils.checkpoint
 from einops import rearrange, repeat
 
+from diffusers import StableDiffusionXLPipeline
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import UNet2DConditionLoadersMixin, AttnProcsLayers
 from diffusers.utils import BaseOutput, logging
@@ -1176,4 +1177,49 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         params = [p.numel() if "temporal" in n else 0 for n, p in model.named_parameters()]
         print(f"### Temporal Module Parameters: {sum(params) / 1e6} M")
         
+        return model
+    
+    @classmethod
+    def from_single_file(cls, pipe, pretrained_model_path, unet_additional_kwargs=None):
+        
+        config_file = 'J:/Weights/sd_xl_1.0/sdxl_orig/unet/config.json'
+        if not os.path.isfile(config_file):
+            raise RuntimeError(f"{config_file} does not exist")
+        with open(config_file, "r") as f:
+            config = json.load(f)
+        config["_class_name"] = cls.__name__
+        config["down_block_types"] = [
+            "DownBlock3D",
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+
+        ]
+        config["up_block_types"] = [
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D",
+            "UpBlock3D",
+        ]
+
+        config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
+
+        from diffusers.utils import SAFETENSORS_WEIGHTS_NAME
+        model = cls.from_config(config, **unet_additional_kwargs)
+        
+        state_dict = {}
+        # from safetensors import safe_open
+        # with safe_open(model_file, framework='pt') as f:
+        #     for k in f.keys():
+        #         state_dict[k] = f.get_tensor(k)
+
+        sd = pipe.unet.state_dict()
+        for k in sd.keys():
+            state_dict[k] = sd[k]
+            
+        m, u = model.load_state_dict(state_dict, strict=False)
+        print(f"### missing keys: {len(m)}; \n### unexpected keys: {len(u)};")
+        # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
+
+        params = [p.numel() if "temporal" in n else 0 for n, p in model.named_parameters()]
+        print(f"### Temporal Module Parameters: {sum(params) / 1e6} M")
+
         return model
