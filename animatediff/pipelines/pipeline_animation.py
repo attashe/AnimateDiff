@@ -330,6 +330,7 @@ class AnimationPipeline(DiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
+        dtype=torch.float32,
         **kwargs,
     ):
         # Default height and width to unet
@@ -359,7 +360,7 @@ class AnimationPipeline(DiffusionPipeline):
             negative_prompt = negative_prompt if isinstance(negative_prompt, list) else [negative_prompt] * batch_size 
         text_embeddings = self._encode_prompt(
             prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt
-        )
+        ).to(dtype)
 
         # Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -377,7 +378,7 @@ class AnimationPipeline(DiffusionPipeline):
             device,
             generator,
             latents,
-        )
+        ).to(dtype)
         latents_dtype = latents.dtype
 
         # Prepare extra step kwargs.
@@ -416,7 +417,7 @@ class AnimationPipeline(DiffusionPipeline):
                         callback(i, t, latents)
 
         # Post-processing
-        video = self.decode_latents(latents)
+        video = self.decode_latents(latents.to(torch.float32))
 
         # Convert to tensor
         if output_type == "tensor":
