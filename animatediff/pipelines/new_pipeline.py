@@ -1,7 +1,7 @@
 # Adapted from https://github.com/showlab/Tune-A-Video/blob/main/tuneavideo/pipelines/pipeline_tuneavideo.py
 
 import inspect
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Union, Dict, Any
 from dataclasses import dataclass
 
 import random
@@ -36,6 +36,12 @@ import pdb
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
+
+@dataclass
+class FrameCondition:
+    type: str  # 'controlnet', 'rgb', 'prompt'
+    data: Any  # Specific data type depending on 'type'
+    scale: float = 1.0  # Scale factor for the condition
 
 @dataclass
 class AnimationPipelineOutput(BaseOutput):
@@ -146,58 +152,12 @@ class AnimationPipeline(DiffusionPipeline):
             EulerAncestralDiscreteScheduler,
             DPMSolverMultistepScheduler,
         ],
-        controlnet: Union[SparseControlNetModel, None] = None,
+        controlnet: Optional[SparseControlNetModel] = None,
     ):
         super().__init__()
-
-        if hasattr(scheduler.config, "steps_offset") and scheduler.config.steps_offset != 1:
-            deprecation_message = (
-                f"The configuration file of this scheduler: {scheduler} is outdated. `steps_offset`"
-                f" should be set to 1 instead of {scheduler.config.steps_offset}. Please make sure "
-                "to update the config accordingly as leaving `steps_offset` might led to incorrect results"
-                " in future versions. If you have downloaded this checkpoint from the Hugging Face Hub,"
-                " it would be very nice if you could open a Pull request for the `scheduler/scheduler_config.json`"
-                " file"
-            )
-            deprecate("steps_offset!=1", "1.0.0", deprecation_message, standard_warn=False)
-            new_config = dict(scheduler.config)
-            new_config["steps_offset"] = 1
-            scheduler._internal_dict = FrozenDict(new_config)
-
-        if hasattr(scheduler.config, "clip_sample") and scheduler.config.clip_sample is True:
-            deprecation_message = (
-                f"The configuration file of this scheduler: {scheduler} has not set the configuration `clip_sample`."
-                " `clip_sample` should be set to False in the configuration file. Please make sure to update the"
-                " config accordingly as not setting `clip_sample` in the config might lead to incorrect results in"
-                " future versions. If you have downloaded this checkpoint from the Hugging Face Hub, it would be very"
-                " nice if you could open a Pull request for the `scheduler/scheduler_config.json` file"
-            )
-            deprecate("clip_sample not set", "1.0.0", deprecation_message, standard_warn=False)
-            new_config = dict(scheduler.config)
-            new_config["clip_sample"] = False
-            scheduler._internal_dict = FrozenDict(new_config)
-
-        is_unet_version_less_0_9_0 = hasattr(unet.config, "_diffusers_version") and version.parse(
-            version.parse(unet.config._diffusers_version).base_version
-        ) < version.parse("0.9.0.dev0")
-        is_unet_sample_size_less_64 = hasattr(unet.config, "sample_size") and unet.config.sample_size < 64
-        if is_unet_version_less_0_9_0 and is_unet_sample_size_less_64:
-            deprecation_message = (
-                "The configuration file of the unet has set the default `sample_size` to smaller than"
-                " 64 which seems highly unlikely. If your checkpoint is a fine-tuned version of any of the"
-                " following: \n- CompVis/stable-diffusion-v1-4 \n- CompVis/stable-diffusion-v1-3 \n-"
-                " CompVis/stable-diffusion-v1-2 \n- CompVis/stable-diffusion-v1-1 \n- runwayml/stable-diffusion-v1-5"
-                " \n- runwayml/stable-diffusion-inpainting \n you should change 'sample_size' to 64 in the"
-                " configuration file. Please make sure to update the config accordingly as leaving `sample_size=32`"
-                " in the config might lead to incorrect results in future versions. If you have downloaded this"
-                " checkpoint from the Hugging Face Hub, it would be very nice if you could open a Pull request for"
-                " the `unet/config.json` file"
-            )
-            deprecate("sample_size<64", "1.0.0", deprecation_message, standard_warn=False)
-            new_config = dict(unet.config)
-            new_config["sample_size"] = 64
-            unet._internal_dict = FrozenDict(new_config)
-
+        self._adjust_scheduler_config(scheduler)
+        self._adjust_unet_config(unet)
+        
         self.register_modules(
             vae=vae,
             text_encoder=text_encoder,
@@ -207,6 +167,33 @@ class AnimationPipeline(DiffusionPipeline):
             controlnet=controlnet,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        
+    def _adjust_scheduler_config(self, scheduler):
+        if hasattr(scheduler.config, "steps_offset") and scheduler.config.steps_offset != 1:
+            deprecation_message = (
+                "The configuration file of this scheduler: {scheduler} is outdated. `steps_offset`"
+                " should be set to 1 instead of {scheduler.config.steps_offset}. Please update the config."
+            )
+            deprecate("steps_offset!=1", "1.0.0", deprecation_message, standard_warn=False)
+            scheduler._internal_dict = FrozenDict({**scheduler.config, "steps_offset": 1})
+
+        if hasattr(scheduler.config, "clip_sample") and scheduler.config.clip_sample is True:
+            deprecation_message = (
+                "The configuration file of this scheduler: {scheduler} has `clip_sample` set to True."
+                " It should be False. Please update the config."
+            )
+            deprecate("clip_sample not set", "1.0.0", deprecation_message, standard_warn=False)
+            scheduler._internal_dict = FrozenDict({**scheduler.config, "clip_sample": False})
+
+    def _adjust_unet_config(self, unet):
+        if hasattr(unet.config, "_diffusers_version") and version.parse(unet.config._diffusers_version) < version.parse("0.9.0.dev0"):
+            if unet.config.sample_size < 64:
+                deprecation_message = (
+                    "The configuration file of the unet has `sample_size` smaller than 64."
+                    " It should be 64. Please update the config."
+                )
+                deprecate("sample_size<64", "1.0.0", deprecation_message, standard_warn=False)
+                unet._internal_dict = FrozenDict({**unet.config, "sample_size": 64})
 
     def enable_vae_slicing(self):
         self.vae.enable_slicing()
@@ -225,7 +212,6 @@ class AnimationPipeline(DiffusionPipeline):
         for cpu_offloaded_model in [self.unet, self.text_encoder, self.vae]:
             if cpu_offloaded_model is not None:
                 cpu_offload(cpu_offloaded_model, device)
-
 
     @property
     def _execution_device(self):
@@ -437,37 +423,64 @@ class AnimationPipeline(DiffusionPipeline):
         latents = latents * self.scheduler.init_noise_sigma
         return latents
     
+    def interpolate_conditions(self, frame_conditions, video_length, latent_dim):
+        # Prepare tensor to hold the interpolated conditions
+        interpolated_conditions = torch.zeros((video_length, *latent_dim))
+
+        # Sorted frames to ensure correct interpolation
+        sorted_frames = sorted(frame_conditions.keys())
+        for i in range(len(sorted_frames)):
+            if i == len(sorted_frames) - 1:
+                next_frame = video_length
+                condition = frame_conditions[sorted_frames[i]].data
+                interpolated_conditions[sorted_frames[i]:next_frame] = condition
+            else:
+                start_frame = sorted_frames[i]
+                end_frame = sorted_frames[i + 1]
+                start_condition = frame_conditions[start_frame].data
+                end_condition = frame_conditions[end_frame].data
+                # Linear interpolation
+                for j in range(end_frame - start_frame):
+                    t = j / (end_frame - start_frame)
+                    interpolated_conditions[start_frame + j] = (1 - t) * start_condition + t * end_condition
+
+        return interpolated_conditions
+        
     @torch.no_grad()
     def prepare_control_cond(self,
                              latent_model_input,
                              text_embeddings,
                              t,
-                             controlnet_images, 
-                             controlnet_image_index,
-                             controlnet_conditioning_scale,
+                             frame_conditions: Dict[int, FrameCondition],
+                            #  controlnet_images, 
+                            #  controlnet_image_index,
+                            #  controlnet_conditioning_scale,
                              video_length,
                              device,
                              dtype):
         down_block_additional_residuals = mid_block_additional_residual = None
-        if (getattr(self, "controlnet", None) != None) and (controlnet_images != None):
-            assert controlnet_images.dim() == 5
+        if (getattr(self, "controlnet", None) is not None):
 
             controlnet_noisy_latents = latent_model_input
             controlnet_prompt_embeds = text_embeddings
+            
+            controlnet_cond = torch.zeros_like(latent_model_input).to(dtype).to(device)
+            controlnet_conditioning_mask = torch.zeros_like(latent_model_input[:, :1, ...]).to(dtype).to(device)
+            
+            for frame_idx, condition in frame_conditions.items():
+                assert condition.data.dim() == 5
+                
+                if condition.type == 'controlnet':
+                    
+                    controlnet_cond[:, :, frame_idx] = condition.data.to(dtype).to(device)
+                    controlnet_conditioning_mask[:, :, frame_idx] = 1
+                elif condition.type == 'rgb':
+                    raise NotImplementedError("RGB conditioning not implemented.")
+                elif condition.type == 'prompt':
+                    raise NotImplementedError("Prompt conditioning not implemented.")
 
-            controlnet_images = controlnet_images.to(dtype).to(device)
-
-            controlnet_cond_shape    = list(controlnet_images.shape)
-            controlnet_cond_shape[2] = video_length
-            controlnet_cond = torch.zeros(controlnet_cond_shape).to(dtype).to(device)
-
-            controlnet_conditioning_mask_shape    = list(controlnet_cond.shape)
-            controlnet_conditioning_mask_shape[1] = 1
-            controlnet_conditioning_mask          = torch.zeros(controlnet_conditioning_mask_shape).to(dtype).to(device)
-
-            assert controlnet_images.shape[2] >= len(controlnet_image_index)
-            controlnet_cond[:,:,controlnet_image_index] = controlnet_images[:,:,:len(controlnet_image_index)]
-            controlnet_conditioning_mask[:,:,controlnet_image_index] = 1
+                # controlnet_cond[:,:,controlnet_image_index] = controlnet_images[:,:,:len(controlnet_image_index)]
+                # controlnet_conditioning_mask[:,:,controlnet_image_index] = 1
 
             # Print shapes
             print(f"controlnet_noisy_latents.shape: {controlnet_noisy_latents.shape}")
@@ -481,7 +494,7 @@ class AnimationPipeline(DiffusionPipeline):
                 encoder_hidden_states=controlnet_prompt_embeds,
                 controlnet_cond=controlnet_cond,
                 conditioning_mask=controlnet_conditioning_mask,
-                conditioning_scale=controlnet_conditioning_scale,
+                conditioning_scale=condition.scale,
                 guess_mode=False, return_dict=False,
             )
             
@@ -619,7 +632,7 @@ class AnimationPipeline(DiffusionPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]],
-        video_length: Optional[int],
+        video_length: int,
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 50,
@@ -634,6 +647,7 @@ class AnimationPipeline(DiffusionPipeline):
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
         dtype=torch.float32,
+        frame_conditions: Optional[Dict[int, FrameCondition]] = None,
 
         # autoregressive latent initialization
         latent_alpha: Optional[float] = None,
@@ -645,11 +659,7 @@ class AnimationPipeline(DiffusionPipeline):
         context_length: int = 16,
         context_stride: int = 1,
         context_overlap: int = 4,
-        # support controlnet
-        controlnet_images: torch.FloatTensor = None,
-        controlnet_image_index: list = [0],
-        controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
-        
+
         # support upscale
         apply_upscale: bool = False,
         strength: float = 0.6,
@@ -664,12 +674,9 @@ class AnimationPipeline(DiffusionPipeline):
         self.check_inputs(prompt, height, width, callback_steps)
 
         # Define call parameters
-        # batch_size = 1 if isinstance(prompt, str) else len(prompt)
-        batch_size = 1
+        batch_size = 1 if isinstance(prompt, str) else len(prompt)
         if latents is not None:
             batch_size = latents.shape[0]
-        if isinstance(prompt, list):
-            batch_size = len(prompt)
 
         device = self._execution_device
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
@@ -679,7 +686,7 @@ class AnimationPipeline(DiffusionPipeline):
 
         # Encode input prompt
         prompt = prompt if isinstance(prompt, list) else [prompt] * batch_size
-        if negative_prompt is not None:
+        if negative_prompt:
             negative_prompt = negative_prompt if isinstance(negative_prompt, list) else [negative_prompt] * batch_size 
         text_embeddings = self._encode_prompt(
             prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt
@@ -709,173 +716,46 @@ class AnimationPipeline(DiffusionPipeline):
         ).to(dtype)
         latents_dtype = latents.dtype
 
-        # Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-        
-        # Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # Sliding window support
-                if sliding_window:
-                    noise_pred = torch.zeros_like(latents, device=latents.device)
-                    noise_pred = torch.cat([noise_pred] * 2) if do_classifier_free_guidance else noise_pred
-                    
-                    down_block_additional_residuals = mid_block_additional_residual = None
-                    if (getattr(self, "controlnet", None) != None) and (controlnet_images != None):
-                        assert controlnet_images.dim() == 5
+                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                down_block_additional_residuals, mid_block_additional_residual = None, None
 
-                        controlnet_noisy_latents = noise_pred
-                        controlnet_prompt_embeds = text_embeddings
-
-                        controlnet_images = controlnet_images.to(dtype).to(device)
-
-                        controlnet_cond_shape    = list(controlnet_images.shape)
-                        controlnet_cond_shape[2] = video_length
-                        controlnet_cond = torch.zeros(controlnet_cond_shape).to(dtype).to(device)
-
-                        controlnet_conditioning_mask_shape    = list(controlnet_cond.shape)
-                        controlnet_conditioning_mask_shape[1] = 1
-                        controlnet_conditioning_mask          = torch.zeros(controlnet_conditioning_mask_shape).to(dtype).to(device)
-
-                        assert controlnet_images.shape[2] >= len(controlnet_image_index)
-                        controlnet_cond[:,:,controlnet_image_index] = controlnet_images[:,:,:len(controlnet_image_index)]
-                        controlnet_conditioning_mask[:,:,controlnet_image_index] = 1
-
-                        # Print shapes
-                        print(f"controlnet_noisy_latents.shape: {controlnet_noisy_latents.shape}")
-                        print(f"controlnet_prompt_embeds.shape: {controlnet_prompt_embeds.shape}")
-                        print(f"controlnet_cond.shape: {controlnet_cond.shape}")
-                        print(f"controlnet_conditioning_mask.shape: {controlnet_conditioning_mask.shape}")
-                        print(f"t: {t}, video_length: {video_length}")
-                    
-                    out_count_final = torch.zeros((1, 1, latents.shape[2], 1, 1), device=latents.device)
-                    print(f"out_count_final.shape: {out_count_final.shape}")
-                    for slide_frames in uniform_v2(step=i, num_steps=0, 
-                                                   num_frames=video_length,
-                                                   context_size=context_length,
-                                                   context_stride=context_stride,
-                                                   context_overlap=context_overlap,
-                                                   closed_loop=False):
-                        if len(slide_frames) == 0:
-                            continue
-                        
-                        out_count_final[:, :, slide_frames] += 1
-                        latents_window = latents[:, :, slide_frames]
-                        
-                        # expand the latents if we are doing classifier free guidance
-                        latent_model_input = torch.cat([latents_window] * 2) if do_classifier_free_guidance else latents_window
-                        latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-                        
-                        if (getattr(self, "controlnet", None) != None) and (controlnet_images != None):
-                            selected_control_cond = controlnet_cond[:,:,slide_frames]
-                            selected_control_mask = controlnet_conditioning_mask[:,:,slide_frames]
-                            
-                            down_block_additional_residuals, mid_block_additional_residual = self.controlnet(
-                                latent_model_input, t,
-                                encoder_hidden_states=controlnet_prompt_embeds,
-                                controlnet_cond=selected_control_cond,
-                                conditioning_mask=selected_control_mask,
-                                conditioning_scale=controlnet_conditioning_scale,
-                                guess_mode=False, return_dict=False,
-                            )
-                        
-                        print(f"step: {i}, frames: {slide_frames}")
-                        print(f"latents_window.shape: {latents_window.shape}")
-                        print(f"latent_model_input.shape: {latent_model_input.shape}")
-                        print(f"text_embeddings.shape: {text_embeddings.shape}")
-                        
-                        noise_pred_window = self.unet(
-                            latent_model_input, t, 
-                            encoder_hidden_states=text_embeddings,
-                            down_block_additional_residuals=down_block_additional_residuals,
-                            mid_block_additional_residual=mid_block_additional_residual,
-                        ).sample.to(dtype=latents_dtype)
-                        
-                        noise_pred[:, :, slide_frames] += noise_pred_window
-                        
-                    # Normalize latents
-                    print(f"out_count_final: {out_count_final.squeeze().cpu().numpy()}")
-                    noise_pred /= out_count_final
-                    
-                    # perform guidance
-                    if do_classifier_free_guidance:
-                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-                    latents = self.scheduler.step(
-                        noise_pred, t, latents, **extra_step_kwargs
-                    ).prev_sample
-                    
-                else:
-                    # expand the latents if we are doing classifier free guidance
-                    latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                    latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-                    
-                    down_block_additional_residuals = mid_block_additional_residual = None
-                    if (getattr(self, "controlnet", None) != None) and (controlnet_images != None):
-                        assert controlnet_images.dim() == 5
-
-                        # prepare controlnet condition
+                # Check if we need to apply conditional processing for this timestep
+                if frame_conditions:
+                    active_conditions = {frame_idx: cond for frame_idx, cond in frame_conditions.items() if frame_idx == i}
+                    if active_conditions:
                         down_block_additional_residuals, mid_block_additional_residual = self.prepare_control_cond(
-                            latent_model_input,
-                            text_embeddings,
-                            t,
-                            controlnet_images, 
-                            controlnet_image_index,
-                            controlnet_conditioning_scale,
-                            video_length,
-                            device,
-                            dtype,
+                            latent_model_input, text_embeddings, t, active_conditions, video_length, device, dtype
                         )
-                    
-                    # predict the noise residual
-                    noise_pred = self.unet(
-                        latent_model_input, t, 
-                        encoder_hidden_states=text_embeddings,
-                        down_block_additional_residuals=down_block_additional_residuals,
-                        mid_block_additional_residual=mid_block_additional_residual,
-                    ).sample.to(dtype=latents_dtype)
 
-                    # perform guidance
-                    if do_classifier_free_guidance:
-                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                # Predict the noise residual
+                noise_pred = self.unet(
+                    latent_model_input, t,
+                    encoder_hidden_states=text_embeddings,
+                    down_block_additional_residuals=down_block_additional_residuals,
+                    mid_block_additional_residual=mid_block_additional_residual
+                ).sample.to(dtype=latents_dtype)
 
-                    # compute the previous noisy sample x_t -> x_t-1
-                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
+                # Apply classifier-free guidance
+                if do_classifier_free_guidance:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                # call the callback, if provided
+                # Compute the previous noisy sample x_t -> x_t-1
+                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
+
+                # Call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-                    if callback is not None and i % callback_steps == 0:
+                    if callback and i % callback_steps == 0:
                         callback(i, t, latents)
 
-        if apply_upscale:
-            # Upscale latents
-            latents = self.latent_upscale_sampling(
-                latents,
-                guidance_scale,
-                text_embeddings,
-                num_inference_steps,
-                strength,
-                upscale_factor,
-                extra_step_kwargs,
-                generator,
-                mode='nearest-exact',
-                dtype=dtype,
-                sliding_window=sliding_window,
-                context_length=context_length,
-                context_stride=context_stride,
-                context_overlap=context_overlap,
-                callback=callback,
-                callback_steps=callback_steps,
-            )
-        
-        # Post-processing
         video = self.decode_latents(latents.to(torch.float32))
 
-        # Convert to tensor
         if output_type == "tensor":
             video = torch.from_numpy(video)
 

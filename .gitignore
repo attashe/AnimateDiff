@@ -13,6 +13,7 @@ scripts/*
 *.ipynb
 *.safetensors
 *.ckpt
+temp*.gif
 
 models/*
 !models/StableDiffusion/

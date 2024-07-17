@@ -637,9 +637,6 @@ class AnimationPipeline(DiffusionPipeline):
 
         # autoregressive latent initialization
         latent_alpha: Optional[float] = None,
-        # support freenoise
-        freenoise: bool = False,
-        freenoise_alpha: float = 0.01,
         # support sliding window
         sliding_window: bool = False,
         context_length: int = 16,
@@ -702,8 +699,7 @@ class AnimationPipeline(DiffusionPipeline):
             generator,
             latents,
             alpha=latent_alpha,
-            freenoise=freenoise,
-            freenoise_alpha=freenoise_alpha,
+            freenoise=True,
             window_size=context_length,
             window_stride=context_stride,
         ).to(dtype)
